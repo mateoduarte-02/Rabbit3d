@@ -346,6 +346,38 @@
           </div>
         </div>
 
+        <a href="#" id="inc_calc_toggle" style="font-size:.78rem; display:none; margin-top:6px">¿Cargar los costos y el reparto de este pedido?</a>
+
+        <div id="inc_calc_wrap" style="display:none; margin-top:12px; padding:14px; border:1px solid var(--line); border-radius:10px; background:var(--bg-panel-alt)">
+          <p class="hint" style="margin-top:0">
+            Cargá acá lo que te costó ESTE pedido puntual (material, terceros, etc). Por defecto
+            no se suman a la tabla de Gastos — sirven para calcular la ganancia real y el reparto
+            de este pedido. Tildá "también contar como gasto real" solo en los casos donde salió
+            plata de tu bolsillo que no está reflejada en otra compra (ej: pagarle a alguien por
+            un trabajo puntual) — el filamento o las cadenitas que usás ya quedan contados cuando
+            comprás el rollo o el paquete, así que esos normalmente van SIN tildar.
+          </p>
+
+          <label for="inc_calc_grams" style="margin-top:12px">Gramos de filamento usados</label>
+          <input type="number" id="inc_calc_grams" min="0" step="1" placeholder="Ej: 250">
+          <p class="hint" id="inc_calc_filament_preview" style="margin-top:4px"></p>
+
+          <label style="margin-top:16px">Insumos fijos usados en este pedido</label>
+          <div id="inc_calc_fixed_items_list"></div>
+
+          <label style="margin-top:16px">Otros costos de este pedido</label>
+          <div id="inc_calc_cost_lines"></div>
+          <button type="button" class="btn btn-ghost btn-small" id="inc_calc_add_line">+ Agregar costo</button>
+
+          <div style="margin-top:16px; padding-top:12px; border-top:1px solid var(--line)">
+            <div class="summary-item"><span class="summary-label">Ingreso de este pedido</span><span class="summary-value" id="inc_calc_income">$0</span></div>
+            <div class="summary-item"><span class="summary-label">Costos totales</span><span class="summary-value" id="inc_calc_costs">$0</span></div>
+            <div class="summary-item"><span class="summary-label">Ganancia neta</span><span class="summary-value" id="inc_calc_net">$0</span></div>
+            <div class="summary-item"><span class="summary-label">Para el emprendimiento</span><span class="summary-value" id="inc_calc_biz_share">$0</span></div>
+            <div class="summary-item"><span class="summary-label">Para vos</span><span class="summary-value" id="inc_calc_my_share">$0</span></div>
+          </div>
+        </div>
+
         <label for="exp_notes">Notas (opcional)</label>
         <input type="text" id="exp_notes" placeholder="Ej: Comprado en local X">
 
@@ -528,6 +560,7 @@ const SUPABASE_URL = "https://jcrpxrfjenjdgqtwkiyw.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpjcnB4cmZqZW5qZGdxdHdraXl3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUyNzAzMDYsImV4cCI6MjA5MDg0NjMwNn0.eygcb6oGMkXRUXoJUCs_9B5yr5doF3LrQn9C1-eYHpE";
 const TABLE_EXPENSES = "rabbit3d_expenses";
 const TABLE_EXPENSE_CATEGORIES = "rabbit3d_expense_categories";
+const TABLE_INCOME_COST_LINES = "rabbit3d_income_cost_lines";
 const TABLE_PRICE_CALCS = "rabbit3d_price_calcs";
 const TABLE_COST_ITEMS = "rabbit3d_cost_items";
 const TABLE_FILAMENT_PRICE = "rabbit3d_filament_price";
@@ -713,6 +746,15 @@ function applyExpenseTypeUI() {
     : isGasto
     ? "Guardar gasto"
     : "Guardar ingreso";
+
+  document.getElementById("exp_calc_toggle").style.display = isGasto ? "inline-block" : "none";
+  document.getElementById("inc_calc_toggle").style.display = isGasto ? "none" : "inline-block";
+  if (isGasto) {
+    document.getElementById("inc_calc_wrap").style.display = "none";
+  } else {
+    document.getElementById("exp_calc_wrap").style.display = "none";
+    updateIncomeCalcSummary();
+  }
 }
 
 document.querySelectorAll("#exp_type_tabs .tab").forEach((tab) => {
@@ -737,6 +779,13 @@ function cancelEditExpense() {
   document.getElementById("exp_calc_filament_preview").textContent = "";
   document.getElementById("exp_calc_cost_lines").innerHTML = "";
   renderExpCalcFixedItemsChecklist();
+
+  document.getElementById("inc_calc_wrap").style.display = "none";
+  document.getElementById("inc_calc_grams").value = "";
+  document.getElementById("inc_calc_filament_preview").textContent = "";
+  document.getElementById("inc_calc_cost_lines").innerHTML = "";
+  renderIncCalcFixedItemsChecklist();
+  updateIncomeCalcSummary();
 }
 document.getElementById("exp_cancel_edit").addEventListener("click", (e) => {
   e.preventDefault();
@@ -865,6 +914,179 @@ function updateExpCalcTotal() {
   document.getElementById("exp_amount").value = Math.round(total);
 }
 
+// ---------------------------------------------------------------
+// Costos y reparto de UN PEDIDO (para movimientos de tipo Ingreso).
+// Mismo mecanismo que la calculadora de gastos (filamento por gramos +
+// insumos fijos + líneas manuales), pero acá NO se usa para completar
+// el monto del ingreso (ese es lo que cobraste) — es un desglose aparte
+// que se guarda junto al ingreso, para saber cuánto costó de verdad
+// ese pedido y cómo se reparte la ganancia.
+//
+// Cada línea tiene un tilde "¿También contar como gasto real?" — por
+// defecto NO, porque el material ya se cuenta como gasto cuando se
+// compra en bulto (el rollo de filamento, el paquete de cadenitas).
+// Se tilda solo para cosas como pagarle a alguien por un trabajo
+// puntual de ESE pedido, que no está reflejado en ninguna otra compra.
+// ---------------------------------------------------------------
+let incCalcLineIdCounter = 0;
+
+document.getElementById("inc_calc_toggle").addEventListener("click", (e) => {
+  e.preventDefault();
+  const wrap = document.getElementById("inc_calc_wrap");
+  wrap.style.display = wrap.style.display === "none" ? "block" : "none";
+  if (wrap.style.display === "block") renderIncCalcFixedItemsChecklist();
+});
+
+function gastoCategoryOptionsHtml(selected) {
+  const options = expenseCategoriesCache.filter((c) => (c.type || "gasto") === "gasto");
+  if (!options.length) return `<option value="">— sin categorías —</option>`;
+  return options
+    .map((c) => `<option value="${escapeHtml(c.name)}" ${c.name === selected ? "selected" : ""}>${escapeHtml(c.name)}</option>`)
+    .join("");
+}
+
+function renderIncCalcFixedItemsChecklist() {
+  const list = document.getElementById("inc_calc_fixed_items_list");
+  if (!list) return;
+  list.innerHTML = "";
+  if (!costItemsCache.length) {
+    list.innerHTML = `<p class="hint">Todavía no cargaste ningún insumo fijo (pestaña "Insumos fijos").</p>`;
+    return;
+  }
+  costItemsCache.forEach((item) => {
+    const row = document.createElement("div");
+    row.className = "checkbox-row";
+    row.innerHTML = `
+      <span class="cr-left">
+        <input type="checkbox" data-inc-fixed-item-checkbox="${item.id}">
+        <span>${escapeHtml(item.name)}</span>
+      </span>
+      <span class="cr-price">${money(item.amount)}</span>
+    `;
+    list.appendChild(row);
+    row.querySelector("input").addEventListener("change", (e) => {
+      if (e.target.checked) {
+        addIncCalcCostLineRow({ label: item.name, amount: item.amount, fixedItemId: item.id });
+      } else {
+        removeIncCalcCostLineByFixedItem(item.id);
+      }
+    });
+  });
+}
+
+function removeIncCalcCostLineByFixedItem(fixedItemId) {
+  const row = document.querySelector(`#inc_calc_cost_lines .calc-cost-line[data-fixed-item-id="${fixedItemId}"]`);
+  if (row) row.remove();
+  updateIncomeCalcSummary();
+}
+
+function addIncCalcCostLineRow({ label = "", amount = "", fixedItemId = null, countsAsGasto = false, gastoCategory = "" } = {}) {
+  const id = ++incCalcLineIdCounter;
+  const container = document.getElementById("inc_calc_cost_lines");
+  const row = document.createElement("div");
+  row.className = "calc-cost-line";
+  row.dataset.lineId = id;
+  if (fixedItemId != null) row.dataset.fixedItemId = fixedItemId;
+  row.innerHTML = `
+    <div class="grid-2">
+      <div><input type="text" placeholder="Ej: Cadenitas" class="cl-label" value="${escapeHtml(label)}"></div>
+      <div style="display:flex; gap:8px; align-items:center">
+        <input type="number" min="0" step="1" placeholder="$ total" class="cl-amount" value="${amount}" style="flex:1">
+        <button type="button" class="btn btn-danger btn-small" data-remove-inc-line="${id}">×</button>
+      </div>
+    </div>
+    <label class="checkbox-row" style="margin-top:6px">
+      <span class="cr-left">
+        <input type="checkbox" class="cl-counts-gasto" ${countsAsGasto ? "checked" : ""}>
+        <span>También contar como gasto real</span>
+      </span>
+    </label>
+    <div class="cl-gasto-category-row" style="display:${countsAsGasto ? "block" : "none"}; margin:6px 0 10px">
+      <select class="cl-gasto-category">${gastoCategoryOptionsHtml(gastoCategory)}</select>
+    </div>
+  `;
+  container.appendChild(row);
+  row.querySelector(".cl-label").addEventListener("input", updateIncomeCalcSummary);
+  row.querySelector(".cl-amount").addEventListener("input", updateIncomeCalcSummary);
+  row.querySelector(".cl-counts-gasto").addEventListener("change", (e) => {
+    row.querySelector(".cl-gasto-category-row").style.display = e.target.checked ? "block" : "none";
+    if (e.target.checked) row.querySelector(".cl-gasto-category").innerHTML = gastoCategoryOptionsHtml();
+  });
+  updateIncomeCalcSummary();
+}
+document.getElementById("inc_calc_add_line").addEventListener("click", () => addIncCalcCostLineRow());
+
+document.getElementById("inc_calc_cost_lines").addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-remove-inc-line]");
+  if (!btn) return;
+  const row = btn.closest(".calc-cost-line");
+  const fixedItemId = row.dataset.fixedItemId;
+  const isFilamentLine = row.dataset.filamentLine === "true";
+  row.remove();
+  if (fixedItemId) {
+    const box = document.querySelector(`[data-inc-fixed-item-checkbox="${fixedItemId}"]`);
+    if (box) box.checked = false;
+  }
+  if (isFilamentLine) {
+    document.getElementById("inc_calc_grams").value = "";
+    document.getElementById("inc_calc_filament_preview").textContent = "";
+  }
+  updateIncomeCalcSummary();
+});
+
+function updateIncomeCalcFilamentCost() {
+  const grams = Number(document.getElementById("inc_calc_grams").value) || 0;
+  const preview = document.getElementById("inc_calc_filament_preview");
+  const existingRow = document.querySelector('#inc_calc_cost_lines .calc-cost-line[data-filament-line="true"]');
+
+  if (grams > 0 && filamentPricePerKg > 0) {
+    const totalCost = (filamentPricePerKg / 1000) * grams;
+    preview.textContent = `= ${money(totalCost)} (a ${money(filamentPricePerKg)}/kg)`;
+    if (existingRow) {
+      existingRow.querySelector(".cl-label").value = "Filamento";
+      existingRow.querySelector(".cl-amount").value = totalCost.toFixed(2);
+    } else {
+      addIncCalcCostLineRow({ label: "Filamento", amount: totalCost.toFixed(2) });
+      const rows = document.querySelectorAll("#inc_calc_cost_lines .calc-cost-line");
+      rows[rows.length - 1].dataset.filamentLine = "true";
+    }
+  } else {
+    preview.textContent =
+      grams > 0 && !filamentPricePerKg ? 'Configurá el precio del kg en la pestaña "Insumos fijos".' : "";
+    if (existingRow) existingRow.remove();
+  }
+  updateIncomeCalcSummary();
+}
+document.getElementById("inc_calc_grams").addEventListener("input", updateIncomeCalcFilamentCost);
+
+// Lee el estado actual de todas las líneas cargadas (usado tanto para
+// mostrar el resumen en vivo como para guardar en la base de datos).
+function currentIncomeCostLines() {
+  return Array.from(document.querySelectorAll("#inc_calc_cost_lines .calc-cost-line")).map((row) => ({
+    label: row.querySelector(".cl-label").value.trim() || "Costo",
+    amount: Number(row.querySelector(".cl-amount").value) || 0,
+    countsAsGasto: row.querySelector(".cl-counts-gasto").checked,
+    gastoCategory: row.querySelector(".cl-gasto-category")?.value || "",
+  }));
+}
+
+function updateIncomeCalcSummary() {
+  const income = Number(document.getElementById("exp_amount").value) || 0;
+  const lines = currentIncomeCostLines();
+  const totalCosts = lines.reduce((sum, l) => sum + l.amount, 0);
+  const net = income - totalCosts;
+  const myPct = myProfitSharePercent || 0;
+  const myShare = net * (myPct / 100);
+  const bizShare = net - myShare;
+
+  document.getElementById("inc_calc_income").textContent = money(income);
+  document.getElementById("inc_calc_costs").textContent = money(totalCosts);
+  document.getElementById("inc_calc_net").textContent = money(net);
+  document.getElementById("inc_calc_biz_share").textContent = `${money(bizShare)} (${100 - myPct}%)`;
+  document.getElementById("inc_calc_my_share").textContent = `${money(myShare)} (${myPct}%)`;
+}
+document.getElementById("exp_amount").addEventListener("input", updateIncomeCalcSummary);
+
 // En celular, el formulario vive en una ficha que sube desde abajo. En
 // escritorio estas mismas funciones no hacen nada visible (la ficha ya
 // está siempre en su lugar en la página).
@@ -883,7 +1105,7 @@ document.getElementById("fabAdd").addEventListener("click", () => {
 document.getElementById("moveFormCloseMobile").addEventListener("click", closeMoveSheet);
 document.getElementById("moveFormBackdrop").addEventListener("click", closeMoveSheet);
 
-function startEditExpense(row) {
+async function startEditExpense(row) {
   editingExpenseId = row.id;
   document.getElementById("exp_date").value = row.expense_date;
   document.querySelectorAll("#exp_type_tabs .tab").forEach((t) => t.classList.remove("is-active"));
@@ -896,6 +1118,52 @@ function startEditExpense(row) {
   document.getElementById("exp_form_title").textContent = "Editando movimiento";
   document.getElementById("exp_cancel_edit").style.display = "inline-block";
   document.getElementById("exp_submit").textContent = "Guardar cambios";
+
+  // Recargar el desglose de costos guardado, si es un ingreso.
+  document.getElementById("inc_calc_cost_lines").innerHTML = "";
+  document.getElementById("inc_calc_grams").value = "";
+  document.getElementById("inc_calc_filament_preview").textContent = "";
+  renderIncCalcFixedItemsChecklist();
+
+  if ((row.type || "gasto") === "ingreso") {
+    const { data: lines } = await sb
+      .from(TABLE_INCOME_COST_LINES)
+      .select("*")
+      .eq("income_id", row.id)
+      .order("sort_order", { ascending: true });
+
+    if (lines && lines.length) {
+      document.getElementById("inc_calc_wrap").style.display = "block";
+
+      const linkedIds = lines.map((l) => l.linked_expense_id).filter(Boolean);
+      let linkedGastoCategories = {};
+      if (linkedIds.length) {
+        const { data: linkedRows } = await sb.from(TABLE_EXPENSES).select("id, category").in("id", linkedIds);
+        (linkedRows || []).forEach((r) => (linkedGastoCategories[r.id] = r.category));
+      }
+
+      lines.forEach((l) => {
+        addIncCalcCostLineRow({
+          label: l.label,
+          amount: l.amount,
+          countsAsGasto: l.counts_as_gasto,
+          gastoCategory: l.linked_expense_id ? linkedGastoCategories[l.linked_expense_id] : "",
+        });
+        if (l.label === "Filamento") {
+          const rows = document.querySelectorAll("#inc_calc_cost_lines .calc-cost-line");
+          rows[rows.length - 1].dataset.filamentLine = "true";
+          if (filamentPricePerKg > 0) {
+            const grams = Math.round((l.amount / filamentPricePerKg) * 1000);
+            document.getElementById("inc_calc_grams").value = grams;
+            document.getElementById("inc_calc_filament_preview").textContent =
+              `= ${money(l.amount)} (a ${money(filamentPricePerKg)}/kg)`;
+          }
+        }
+      });
+      updateIncomeCalcSummary();
+    }
+  }
+
   openMoveSheet();
   document.getElementById("panel-gastos").scrollIntoView({ behavior: "smooth", block: "start" });
 }
@@ -910,19 +1178,73 @@ document.getElementById("expenseForm").addEventListener("submit", async (e) => {
     status.textContent = "Guardando…";
 
     const type = currentExpenseType();
+    const expenseDate = document.getElementById("exp_date").value;
+    const description = document.getElementById("exp_description").value.trim() || null;
     const payload = {
-      expense_date: document.getElementById("exp_date").value,
+      expense_date: expenseDate,
       type,
       category: document.getElementById("exp_category").value || null,
-      description: document.getElementById("exp_description").value.trim() || null,
+      description,
       amount: Number(document.getElementById("exp_amount").value),
       notes: document.getElementById("exp_notes").value.trim() || null,
     };
 
-    const { error } = editingExpenseId
-      ? await sb.from(TABLE_EXPENSES).update(payload).eq("id", editingExpenseId)
-      : await sb.from(TABLE_EXPENSES).insert(payload);
-    if (error) throw error;
+    let incomeId = editingExpenseId;
+    if (editingExpenseId) {
+      const { error } = await sb.from(TABLE_EXPENSES).update(payload).eq("id", editingExpenseId);
+      if (error) throw error;
+    } else {
+      const { data, error } = await sb.from(TABLE_EXPENSES).insert(payload).select("id").single();
+      if (error) throw error;
+      incomeId = data.id;
+    }
+
+    // Costos y reparto del pedido (solo para ingresos). Al editar, se
+    // borran las líneas anteriores (y sus gastos vinculados) y se
+    // vuelven a crear con lo que hay ahora en el formulario — más simple
+    // y confiable que tratar de "adivinar" qué cambió línea por línea.
+    if (type === "ingreso") {
+      const { data: oldLines } = await sb
+        .from(TABLE_INCOME_COST_LINES)
+        .select("linked_expense_id")
+        .eq("income_id", incomeId);
+      const oldLinkedIds = (oldLines || []).map((l) => l.linked_expense_id).filter(Boolean);
+      if (oldLinkedIds.length) await sb.from(TABLE_EXPENSES).delete().in("id", oldLinkedIds);
+      await sb.from(TABLE_INCOME_COST_LINES).delete().eq("income_id", incomeId);
+
+      const lines = currentIncomeCostLines().filter((l) => l.amount > 0 || l.label !== "Costo");
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        let linkedExpenseId = null;
+
+        if (line.countsAsGasto && line.gastoCategory) {
+          const { data: linkedExpense, error: linkedErr } = await sb
+            .from(TABLE_EXPENSES)
+            .insert({
+              expense_date: expenseDate,
+              type: "gasto",
+              category: line.gastoCategory,
+              description: description ? `${description} — ${line.label}` : line.label,
+              amount: line.amount,
+              notes: null,
+            })
+            .select("id")
+            .single();
+          if (linkedErr) throw linkedErr;
+          linkedExpenseId = linkedExpense.id;
+        }
+
+        const { error: lineErr } = await sb.from(TABLE_INCOME_COST_LINES).insert({
+          income_id: incomeId,
+          label: line.label,
+          amount: line.amount,
+          counts_as_gasto: line.countsAsGasto,
+          linked_expense_id: linkedExpenseId,
+          sort_order: i,
+        });
+        if (lineErr) throw lineErr;
+      }
+    }
 
     status.className = "status ok";
     status.textContent = "Guardado correctamente.";
@@ -1000,11 +1322,79 @@ function renderExpensesTable(rows) {
       <td>${escapeHtml(exp.description || "—")}${exp.category ? ` <span class="hint" style="display:inline">(${escapeHtml(CATEGORY_LABELS[exp.category] || exp.category)})</span>` : ""}</td>
       <td class="${isIncome ? "positive" : "negative"}">${isIncome ? "+" : "-"}${money(exp.amount)}</td>
       <td class="row-actions">
+        ${isIncome ? `<button class="btn btn-ghost btn-small" data-detail-expense="${exp.id}">Ver detalle</button>` : ""}
         <button class="btn btn-edit" data-edit-expense="${exp.id}">Editar</button>
         <button class="btn btn-danger" data-delete-expense="${exp.id}">Borrar</button>
       </td>`;
     tbody.appendChild(tr);
+    if (isIncome) {
+      const detailRow = document.createElement("tr");
+      detailRow.className = "income-detail-row";
+      detailRow.id = `income-detail-${exp.id}`;
+      detailRow.style.display = "none";
+      detailRow.innerHTML = `<td colspan="5"></td>`;
+      tbody.appendChild(detailRow);
+    }
   });
+}
+
+// Muestra/oculta el desglose de costos y reparto de un ingreso, sin
+// tener que abrir "Editar" — se busca en la base solo la primera vez
+// que se despliega cada uno.
+const incomeDetailCache = {};
+async function toggleIncomeDetail(incomeId, incomeAmount) {
+  if (!incomeDetailCache[incomeId]) {
+    const { data: lines } = await sb
+      .from(TABLE_INCOME_COST_LINES)
+      .select("*")
+      .eq("income_id", incomeId)
+      .order("sort_order", { ascending: true });
+    incomeDetailCache[incomeId] = lines || [];
+  }
+  const lines = incomeDetailCache[incomeId];
+  const totalCosts = lines.reduce((s, l) => s + Number(l.amount), 0);
+  const net = incomeAmount - totalCosts;
+  const myPct = myProfitSharePercent || 0;
+  const myShare = net * (myPct / 100);
+  const bizShare = net - myShare;
+
+  const bodyHtml = `
+    <div style="padding:12px 4px">
+      ${
+        lines.length
+          ? lines
+              .map(
+                (l) => `
+        <div class="summary-item">
+          <span class="summary-label">${escapeHtml(l.label)}${l.counts_as_gasto ? ' <span class="hint" style="display:inline">(también en Gastos)</span>' : ""}</span>
+          <span class="summary-value">-${money(l.amount)}</span>
+        </div>`
+              )
+              .join("")
+          : `<p class="hint" style="margin:0">Este ingreso no tiene costos cargados.</p>`
+      }
+      <div class="summary-item" style="margin-top:8px; padding-top:8px; border-top:1px solid var(--line)">
+        <span class="summary-label">Ganancia neta</span><span class="summary-value">${money(net)}</span>
+      </div>
+      <div class="summary-item"><span class="summary-label">Para el emprendimiento (${100 - myPct}%)</span><span class="summary-value">${money(bizShare)}</span></div>
+      <div class="summary-item"><span class="summary-label">Para vos (${myPct}%)</span><span class="summary-value">${money(myShare)}</span></div>
+    </div>
+  `;
+
+  // versión escritorio (fila de tabla)
+  const tableRow = document.getElementById(`income-detail-${incomeId}`);
+  if (tableRow) {
+    const nowHidden = tableRow.style.display === "none";
+    tableRow.style.display = nowHidden ? "table-row" : "none";
+    if (nowHidden) tableRow.querySelector("td").innerHTML = bodyHtml;
+  }
+  // versión celular (tarjeta)
+  const cardDetail = document.getElementById(`income-detail-card-${incomeId}`);
+  if (cardDetail) {
+    const nowHidden = cardDetail.style.display === "none";
+    cardDetail.style.display = nowHidden ? "block" : "none";
+    if (nowHidden) cardDetail.innerHTML = bodyHtml;
+  }
 }
 
 // Versión en tarjetas de la misma lista, para celular (ver estilos con
@@ -1028,10 +1418,18 @@ function renderMoveCards(rows) {
       </div>
       <div class="move-amount" style="color:${isIncome ? "var(--green)" : "var(--red)"}">${isIncome ? "+" : "-"}${money(exp.amount)}</div>
       <div class="move-actions">
+        ${isIncome ? `<button data-detail-expense="${exp.id}" aria-label="Ver detalle">🧾</button>` : ""}
         <button data-edit-expense="${exp.id}" aria-label="Editar">✏️</button>
         <button data-delete-expense="${exp.id}" aria-label="Borrar">🗑️</button>
       </div>`;
     list.appendChild(card);
+    if (isIncome) {
+      const detail = document.createElement("div");
+      detail.className = "income-detail-card";
+      detail.id = `income-detail-card-${exp.id}`;
+      detail.style.display = "none";
+      list.appendChild(detail);
+    }
   });
 }
 
@@ -1194,6 +1592,12 @@ async function handleMovementListClick(e) {
   if (editBtn) {
     const row = expensesCache.find((r) => String(r.id) === editBtn.dataset.editExpense);
     if (row) startEditExpense(row);
+    return;
+  }
+  const detailBtn = e.target.closest("[data-detail-expense]");
+  if (detailBtn) {
+    const row = expensesCache.find((r) => String(r.id) === detailBtn.dataset.detailExpense);
+    if (row) toggleIncomeDetail(row.id, Number(row.amount));
     return;
   }
   const delBtn = e.target.closest("[data-delete-expense]");
