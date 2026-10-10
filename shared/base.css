@@ -1,0 +1,41 @@
+/* ==========================================================
+   RABBIT3D — design tokens compartidos por las 4 páginas
+   (paleta tomada del logo real: fondo navy casi negro, rojo de
+   las orejas/lengua/corbata, gris-azulado del pelaje, blanco)
+   ========================================================== */
+:root{
+  --bg:           #0A0F1A;   /* fondo general */
+  --bg-alt:       #101827;   /* paneles alternados (zebra) — solo index */
+  --bg-panel:     #131C2E;   /* tarjetas */
+  --bg-panel-2:   #1A2438;   /* hover / superficies secundarias — index */
+  --bg-panel-alt: #1A2438;   /* mismo tono, nombre usado en admin/finanzas/ventas */
+  --bg-footer:    #060910;   /* pie de página, el tono más oscuro — index */
+
+  --ink:          #F3F5F8;   /* texto principal, casi blanco */
+  --ink-soft:     #94A1B4;   /* texto secundario, gris-azulado (pelaje) */
+
+  --line:         rgba(255,255,255,0.12);
+  --line-soft:    rgba(255,255,255,0.07);
+  --line-strong:  rgba(255,255,255,0.24);
+
+  --red:          #E8125C;   /* acento principal — orejas / lengua / corbata */
+  --red-dark:     #B80F49;
+  --slate:        #7C8CA1;   /* acento secundario — pelaje del conejo */
+  --slate-dark:   #3E4A5C;
+  --white:        #FFFFFF;
+  --green:        #4ADE80;   /* usado en finanzas/ventas para montos positivos */
+
+  --font-display: 'Space Grotesk', 'Arial', sans-serif;
+  --font-body:    'Inter', system-ui, sans-serif;
+  --font-mono:    'IBM Plex Mono', 'Courier New', monospace;
+
+  --radius: 14px;
+  --radius-sm: 8px;
+  --wrap: 1240px;
+
+  --shadow-soft: 0 14px 34px rgba(0,0,0,0.5);
+}
+
+@media (prefers-reduced-motion: reduce){
+  *{ animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+}
