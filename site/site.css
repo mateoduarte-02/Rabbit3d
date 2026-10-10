@@ -424,8 +424,19 @@ p{ margin: 0 0 1em; color: var(--ink-soft); }
 .sales-country-count{ width:34px; text-align:right; font-family: var(--font-mono); font-size:.82rem; color: var(--ink-soft); flex-shrink:0; }
 .sales-country-list-toggle{ display:none; margin:16px auto 0; padding:8px 20px; font-size:.82rem; }
 
+/* Versión centrada (sección Cults3D): las 4 estadísticas siempre en una sola fila. */
+.about-stats-center{
+  display:grid; grid-template-columns: repeat(4, 1fr); gap: 16px; max-width: 760px;
+  flex-wrap:nowrap;
+}
 .about-stats-center li{ align-items:center; }
 .about-stats-center strong{ font-size:1.8rem; }
+.about-stats-center span{ line-height:1.35; }
+@media (max-width:560px){
+  .about-stats-center{ gap: 8px; padding: 16px 0; }
+  .about-stats-center strong{ font-size:1.15rem; }
+  .about-stats-center span{ font-size:.66rem; }
+}
 
 /* process grid */
 .process-grid{
